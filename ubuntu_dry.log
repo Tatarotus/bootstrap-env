@@ -1,0 +1,16 @@
+[2026-04-01 21:20:45] [34m[INFO][0m Detected OS: ubuntu, Architecture: x86_64
+[2026-04-01 21:20:45] [34m[INFO][0m Installing nala...
+[2026-04-01 21:20:45] [35m[DRY-RUN][0m sudo apt update
+[2026-04-01 21:20:45] [35m[DRY-RUN][0m sudo apt install -y nala
+[2026-04-01 21:20:45] [35m[DRY-RUN][0m sudo nala update
+[2026-04-01 21:20:45] [34m[INFO][0m Installing base dependencies...
+[2026-04-01 21:20:45] [35m[DRY-RUN][0m sudo nala install -y git curl stow unzip jq fd-find ripgrep fzf zoxide
+[2026-04-01 21:20:45] [35m[DRY-RUN][0m git clone https://github.com/Tatarotus/dotfiles /home/testuser/.dotfiles
+[2026-04-01 21:20:45] [35m[DRY-RUN][0m sudo nala install -y stow
+[2026-04-01 21:20:45] [35m[DRY-RUN][0m git config --global init.defaultBranch main
+[2026-04-01 21:20:45] [35m[DRY-RUN][0m git config --global pull.rebase true
+[2026-04-01 21:20:45] [34m[INFO][0m [DRY-RUN] State: gitconfig=configured
+[2026-04-01 21:20:45] [34m[INFO][0m Stowing gitconfig...
+[2026-04-01 21:20:45] [33m[WARN][0m Dotfiles directory missing. Skipping stow for gitconfig.
+[2026-04-01 21:20:45] [32m[SUCCESS][0m Setup complete! Summary:
+[2026-04-01 21:20:45] [31m[ERROR][0m Failed at line 359 – check /home/testuser/.local/share/bootstrap/setup.log

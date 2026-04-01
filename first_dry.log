@@ -1,0 +1,13 @@
+[2026-04-01 20:06:59] [34m[INFO][0m Detected OS: arch, Architecture: x86_64
+[2026-04-01 20:06:59] [35m[DRY-RUN][0m sudo pacman -Sy
+[2026-04-01 20:06:59] [34m[INFO][0m Installing base dependencies...
+[2026-04-01 20:07:00] [35m[DRY-RUN][0m sudo pacman -S --noconfirm --needed git curl stow unzip jq fd ripgrep fzf zoxide
+[2026-04-01 20:07:00] [35m[DRY-RUN][0m git clone https://github.com/Tatarotus/dotfiles /home/testuser/.dotfiles
+[2026-04-01 20:07:00] [35m[DRY-RUN][0m sudo pacman -S --noconfirm --needed stow
+[2026-04-01 20:07:00] [35m[DRY-RUN][0m git config --global init.defaultBranch main
+[2026-04-01 20:07:00] [35m[DRY-RUN][0m git config --global pull.rebase true
+[2026-04-01 20:07:00] [34m[INFO][0m [DRY-RUN] State: gitconfig=configured
+[2026-04-01 20:07:00] [34m[INFO][0m Stowing gitconfig...
+[2026-04-01 20:07:00] [33m[WARN][0m Dotfiles directory missing. Skipping stow for gitconfig.
+[2026-04-01 20:07:00] [32m[SUCCESS][0m Setup complete! Summary:
+[2026-04-01 20:07:00] [31m[ERROR][0m Failed at line 359 – check /home/testuser/.local/share/bootstrap/setup.log
