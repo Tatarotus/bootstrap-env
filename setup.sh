@@ -95,13 +95,20 @@ execute() {
         local success=0
         
         while [[ $retry_count -le $max_retries ]]; do
-            if "$@"; then
+            local exit_code=0
+            if [[ $# -eq 1 ]] && [[ "$1" == *"|"* ]]; then
+                eval "$1" || exit_code=$?
+            else
+                "$@" || exit_code=$?
+            fi
+
+            if [[ $exit_code -eq 0 ]]; then
                 success=1
                 break
             else
                 retry_count=$((retry_count + 1))
                 if [[ $retry_count -le $max_retries ]]; then
-                    warn "Command failed. Retrying ($retry_count/$max_retries)..."
+                    warn "Command failed with exit code $exit_code. Retrying ($retry_count/$max_retries)..."
                     sleep 2
                 fi
             fi
