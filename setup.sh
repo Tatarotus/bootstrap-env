@@ -86,7 +86,34 @@ execute() {
         echo -e "\e[35m[DRY-RUN]\e[0m $*"
     else
         [[ "$VERBOSE" -eq 1 ]] && echo -e "\e[36m[EXEC]\e[0m $*"
-        "$@"
+        
+        local max_retries=2
+        local retry_count=0
+        local success=0
+        
+        while [[ $retry_count -le $max_retries ]]; do
+            if "$@"; then
+                success=1
+                break
+            else
+                retry_count=$((retry_count + 1))
+                if [[ $retry_count -le $max_retries ]]; then
+                    warn "Command failed. Retrying ($retry_count/$max_retries)..."
+                    sleep 2
+                fi
+            fi
+        done
+        
+        if [[ $success -eq 0 ]]; then
+            # Special fallback for Ubuntu/Debian if nala is failing
+            if [[ "$PKG_MANAGER" == "nala" ]] && [[ "$1" == "$sudo_cmd" ]] && [[ "$2" == "nala" ]]; then
+                warn "Nala failed. Falling back to apt-get..."
+                local apt_cmd=("${@/nala/apt-get}")
+                "${apt_cmd[@]}" || return 1
+            else
+                return 1
+            fi
+        fi
     fi
 }
 
