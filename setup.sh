@@ -171,10 +171,10 @@ install_base_dependencies() {
     info "Installing base dependencies..."
     case "$OS" in
         ubuntu|debian|mint|pop|fedora)
-            execute $PKG_INSTALL git curl stow unzip jq fd-find ripgrep fzf zoxide
+            execute $PKG_INSTALL git curl stow unzip jq fd-find ripgrep fzf zoxide eza
             ;;
         arch|manjaro)
-            execute $PKG_INSTALL git curl stow unzip jq fd ripgrep fzf zoxide
+            execute $PKG_INSTALL git curl stow unzip jq fd ripgrep fzf zoxide eza
             ;;
     esac
 }
@@ -357,16 +357,18 @@ module_aliases() {
     touch "$zshrc"
 
     declare -A aliases=(
-        [ls]="ls --color=auto"
-        [ll]="ls -lah"
-        [la]="ls -A"
-        [l]="ls -CF"
+        [ls]="eza --icons"
+        [ll]="eza -lah --icons"
+        [la]="eza -A --icons"
+        [lt]="eza --tree --icons"
+        [l]="eza -CF --icons"
         [gs]="git status"
         [ga]="git add"
         [gc]="git commit"
         [gp]="git push"
         [v]="nvim"
         [y]="yazi"
+        [z]="z"
     )
 
     for key in "${!aliases[@]}"; do
@@ -376,6 +378,13 @@ module_aliases() {
             info "Added alias: $key"
         fi
     done
+
+    # Initialize zoxide (z) in zshrc if not present
+    if ! grep -q "zoxide init zsh" "$zshrc"; then
+        echo 'eval "$(zoxide init zsh)"' >> "$zshrc"
+        info "Initialized zoxide in .zshrc"
+    fi
+
     set_state "aliases" "configured"
 }
 
