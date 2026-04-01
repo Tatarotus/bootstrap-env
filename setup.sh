@@ -14,7 +14,10 @@ VERBOSE=0
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/Tatarotus/dotfiles}"
 DOTFILES_DIR="${DOTFILES_DIR:-$HOME/.dotfiles}"
 MODULES_TO_INSTALL=()
-ALL_MODULES=("nvim" "zsh" "starship" "alacritty" "tmux" "yazi" "gitconfig")
+ALL_MODULES=("nvim" "zsh" "starship" "alacritty" "tmux" "yazi" "gitconfig" "node" "aliases")
+
+# Ensure /usr/local/bin is in PATH for the script's duration
+export PATH="/usr/local/bin:$PATH"
 
 # Required minimum versions for critical tools
 declare -A MIN_VERSIONS=(
@@ -186,7 +189,7 @@ install_build_dependencies() {
             execute $PKG_INSTALL base-devel cmake unzip ninja gettext
             ;;
         fedora)
-            execute $PKG_INSTALL ninja-build cmake gcc-c++ gettext unzip
+            execute $PKG_INSTALL ninja-build cmake gcc-c++ gettext unzip make
             ;;
     esac
 }
@@ -321,6 +324,61 @@ module_gitconfig() {
     stow_module gitconfig
 }
 
+module_node() {
+    local current=$(get_tool_version node)
+    if [[ "$current" != "none" ]]; then
+        info "Node.js $current already installed."
+        set_state "node" "$current"
+        return
+    fi
+
+    info "Installing Node.js..."
+    case "$OS" in
+        ubuntu|debian|mint|pop)
+            # Use NodeSource for latest LTS, fallback if it fails
+            execute "curl -fsSL https://deb.nodesource.com/setup_lts.x | $sudo_cmd bash -" || warn "NodeSource script failed, falling back to default repo."
+            execute $PKG_INSTALL nodejs
+            ;;
+        arch|manjaro)
+            execute $PKG_INSTALL nodejs npm
+            ;;
+        fedora)
+            execute $PKG_INSTALL nodejs
+            ;;
+    esac
+    set_state "node" "$(get_tool_version node)"
+}
+
+module_aliases() {
+    info "Configuring personal aliases..."
+    local zshrc="$HOME/.zshrc"
+    
+    # Ensure .zshrc exists
+    touch "$zshrc"
+
+    declare -A aliases=(
+        [ls]="ls --color=auto"
+        [ll]="ls -lah"
+        [la]="ls -A"
+        [l]="ls -CF"
+        [gs]="git status"
+        [ga]="git add"
+        [gc]="git commit"
+        [gp]="git push"
+        [v]="nvim"
+        [y]="yazi"
+    )
+
+    for key in "${!aliases[@]}"; do
+        local val="${aliases[$key]}"
+        if ! grep -q "alias $key=" "$zshrc"; then
+            echo "alias $key='$val'" >> "$zshrc"
+            info "Added alias: $key"
+        fi
+    done
+    set_state "aliases" "configured"
+}
+
 # Task 2: Drift Detection in --status (Signal vs Noise)
 status() {
     echo -e "\n\e[34m[SYSTEM STATUS]\e[0m"
@@ -329,7 +387,7 @@ status() {
         local required="${MIN_VERSIONS[$mod]}"
         local state_val=$(grep "^$mod=" "$STATE_FILE" 2>/dev/null | cut -d= -f2)
 
-        if [[ "$mod" == "gitconfig" ]]; then
+        if [[ "$mod" == "gitconfig" || "$mod" == "aliases" ]]; then
             if [[ "$state_val" == "configured" ]]; then
                 echo -e "  $mod: configured \e[32m✓\e[0m"
             else
@@ -426,6 +484,8 @@ main() {
             tmux) module_tmux ;;
             yazi) module_yazi ;;
             gitconfig) module_gitconfig ;;
+            node) module_node ;;
+            aliases) module_aliases ;;
         esac
     done
     success "Setup complete! Summary:"
