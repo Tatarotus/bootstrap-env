@@ -96,7 +96,7 @@ execute() {
         
         while [[ $retry_count -le $max_retries ]]; do
             local exit_code=0
-            if [[ $# -eq 1 ]] && [[ "$1" == *"|"* ]]; then
+            if [[ $# -eq 1 ]]; then
                 eval "$1" || exit_code=$?
             else
                 "$@" || exit_code=$?
@@ -411,8 +411,8 @@ module_fonts() {
     local temp_dir="/tmp/fonts_build"
     execute rm -rf "$temp_dir"
     execute mkdir -p "$temp_dir"
-    execute "curl -fLo $temp_dir/JetBrainsMono.zip https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip"
-    execute "unzip -o $temp_dir/JetBrainsMono.zip -d $font_dir"
+    execute curl -fLo "$temp_dir/JetBrainsMono.zip" "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip"
+    execute unzip -o "$temp_dir/JetBrainsMono.zip" -d "$font_dir"
     execute fc-cache -f
     execute rm -rf "$temp_dir"
     
