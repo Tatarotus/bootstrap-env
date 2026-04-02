@@ -32,33 +32,13 @@ declare -A MIN_VERSIONS=(
     [zsh]="5.8"
 )
 
-# --- State & Logging ---
-# Use REAL_HOME for persistent state and logs
-STATE_DIR="$REAL_HOME/.local/share/bootstrap"
-STATE_FILE="$STATE_DIR/state"
-LOG_FILE="$STATE_DIR/setup.log"
-
-execute mkdir -p "$STATE_DIR"
-execute chown -R "$REAL_USER:$REAL_USER" "$STATE_DIR" 2>/dev/null || true
-
-exec > >(while read -r line; do echo "[$(date '+%Y-%m-%d %H:%M:%S')] $line"; done | tee -a "$LOG_FILE") 2>&1
-trap 'error "Failed at line $LINENO – check $LOG_FILE"' ERR
-
-set_state() {
-    local module=$1
-    local value=$2
-    [[ "$DRY_RUN" -eq 1 ]] && { info "[DRY-RUN] State: $module=$value"; return; }
-    touch "$STATE_FILE"
-    (grep -v "^$module=" "$STATE_FILE" 2>/dev/null || true; echo "$module=$value") | sort -u > "$STATE_FILE.tmp"
-    mv "$STATE_FILE.tmp" "$STATE_FILE"
-}
-
 # --- UI Helpers ---
 info() { echo -e "\e[34m[INFO]\e[0m $*"; }
 warn() { echo -e "\e[33m[WARN]\e[0m $*"; }
 error() { echo -e "\e[31m[ERROR]\e[0m $*"; exit 1; }
 success() { echo -e "\e[32m[SUCCESS]\e[0m $*"; }
 
+# --- Logic Helpers ---
 get_tool_version() {
     local cmd=$1
     if ! command -v "$cmd" &>/dev/null; then
@@ -70,26 +50,23 @@ get_tool_version() {
     echo "$v_output" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?' | head -n1 || echo "installed"
 }
 
-# Task 1: Semantic Version Comparison (Hardened for Pre-releases)
-# Edge Case: If both versions have suffixes (e.g. 0.10.0-dev vs 0.10.0-beta), 
-# we fall back to lexicographical sort-V. This handles most common cases 
-# (beta < rc) without full SemVer parser complexity.
 version_ge() {
     local v_sys=$1
     local v_req=$2
     [[ "$v_sys" == "$v_req" ]] && return 0
-    
-    # If the system version is a pre-release (contains -) but the requirement is stable, 
-    # we treat it as lower unless the base numbers are already higher.
     if [[ "$v_sys" == *[-+]* ]] && [[ "$v_req" != *[-+]* ]]; then
         local v_sys_base="${v_sys%%[-+]*}"
         if [[ "$v_sys_base" == "$v_req" ]]; then
-            return 1 # 0.10.0-dev < 0.10.0
+            return 1 
         fi
     fi
-    
     [[ "$(printf '%s\n%s' "$v_sys" "$v_req" | sort -V | head -n1)" == "$v_req" ]]
 }
+
+# --- State & Logging Path Setup ---
+STATE_DIR="$REAL_HOME/.local/share/bootstrap"
+STATE_FILE="$STATE_DIR/state"
+LOG_FILE="$STATE_DIR/setup.log"
 
 # --- Dry Run Wrapper ---
 execute() {
@@ -112,7 +89,6 @@ execute() {
 
             if [[ $exit_code -eq 0 ]]; then
                 success=1
-                # Refresh command hash table so new binaries are found immediately
                 hash -r 2>/dev/null || true
                 break
             else
@@ -125,7 +101,6 @@ execute() {
         done
         
         if [[ $success -eq 0 ]]; then
-            # Special fallback for Ubuntu/Debian if nala is failing
             if [[ "$PKG_MANAGER" == "nala" ]] && [[ "$1" == "$sudo_cmd" ]] && [[ "$2" == "nala" ]]; then
                 warn "Nala failed. Falling back to apt-get..."
                 local apt_cmd=("${@/nala/apt-get}")
@@ -135,6 +110,18 @@ execute() {
             fi
         fi
     fi
+}
+
+set_state() {
+    local module=$1
+    local value=$2
+    [[ "$DRY_RUN" -eq 1 ]] && { info "[DRY-RUN] State: $module=$value"; return; }
+    execute mkdir -p "$STATE_DIR"
+    execute chown -R "$REAL_USER:$REAL_USER" "$STATE_DIR" 2>/dev/null || true
+    touch "$STATE_FILE"
+    (grep -v "^$module=" "$STATE_FILE" 2>/dev/null || true; echo "$module=$value") | sort -u > "$STATE_FILE.tmp"
+    mv "$STATE_FILE.tmp" "$STATE_FILE"
+    execute chown "$REAL_USER:$REAL_USER" "$STATE_FILE" 2>/dev/null || true
 }
 
 # --- System Detection ---
@@ -213,7 +200,7 @@ install_build_dependencies() {
 
 # --- stow_module Helper ---
 stow_module() {
-    info "Stowing $1..."
+    info "Stowing $1 for $REAL_USER..."
     if [[ -d "$DOTFILES_DIR/$1" ]]; then
         (cd "$DOTFILES_DIR" && execute stow -R "$1")
     else
@@ -227,9 +214,11 @@ module_dotfiles() {
     if [[ ! -d "$DOTFILES_DIR" ]]; then
         execute git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
         execute chown -R "$REAL_USER:$REAL_USER" "$DOTFILES_DIR"
-    else
+    elif [[ -d "$DOTFILES_DIR/.git" ]]; then
         info "Dotfiles already cloned at $DOTFILES_DIR. Pulling latest (autostash enabled)..."
         (cd "$DOTFILES_DIR" && execute git pull --rebase --autostash)
+    else
+        warn "$DOTFILES_DIR exists but is not a git repository. Skipping pull."
     fi
     command -v stow &>/dev/null || execute $PKG_INSTALL stow
 }
@@ -270,10 +259,9 @@ module_zsh() {
         current=$(get_tool_version zsh)
     fi
     set_state "zsh" "$current"
-    local current_user="${USER:-$(whoami)}"
     local zsh_path=$(command -v zsh || echo "/usr/bin/zsh")
-    [[ "$(getent passwd "$current_user" | cut -d: -f7)" != "$zsh_path" ]] && \
-        execute $sudo_cmd chsh -s "$zsh_path" "$current_user"
+    [[ "$(getent passwd "$REAL_USER" | cut -d: -f7)" != "$zsh_path" ]] && \
+        execute $sudo_cmd chsh -s "$zsh_path" "$REAL_USER"
     stow_module zsh
 }
 
@@ -325,18 +313,17 @@ module_yazi() {
     stow_module yazi
 }
 
-# Task 3: Quiet Idempotency for Git Configuration
 git_config_set() {
     local key=$1
     local value=$2
-    local current=$(git config --global "$key" || echo "")
+    local current=$(sudo -u "$REAL_USER" git config --global "$key" || echo "")
     if [[ "$current" != "$value" ]]; then
-        execute git config --global "$key" "$value"
+        execute sudo -u "$REAL_USER" git config --global "$key" "$value"
     fi
 }
 
 module_gitconfig() {
-    info "Configuring Git..."
+    info "Configuring Git for $REAL_USER..."
     git_config_set "init.defaultBranch" "main"
     git_config_set "pull.rebase" "true"
     git_config_set "core.editor" "nvim"
@@ -351,11 +338,9 @@ module_node() {
         set_state "node" "$current"
         return
     fi
-
     info "Installing Node.js..."
     case "$OS" in
         ubuntu|debian|mint|pop)
-            # Use NodeSource for latest LTS, fallback if it fails
             execute "curl -fsSL https://deb.nodesource.com/setup_lts.x | $sudo_cmd bash -" || warn "NodeSource script failed, falling back to default repo."
             execute $PKG_INSTALL nodejs
             ;;
@@ -372,10 +357,7 @@ module_node() {
 module_aliases() {
     info "Configuring personal aliases for $REAL_USER..."
     local zshrc="$REAL_HOME/.zshrc"
-    
-    # Ensure .zshrc exists
     [[ ! -f "$zshrc" ]] && execute touch "$zshrc" && execute chown "$REAL_USER:$REAL_USER" "$zshrc"
-
     declare -A aliases=(
         [ls]="eza --icons"
         [ll]="eza -lah --icons"
@@ -390,7 +372,6 @@ module_aliases() {
         [y]="yazi"
         [z]="z"
     )
-
     for key in "${!aliases[@]}"; do
         local val="${aliases[$key]}"
         if ! grep -q "alias $key=" "$zshrc" 2>/dev/null; then
@@ -398,13 +379,10 @@ module_aliases() {
             info "Added alias: $key"
         fi
     done
-
-    # Initialize zoxide (z) in zshrc if not present
     if ! grep -q "zoxide init zsh" "$zshrc" 2>/dev/null; then
         echo 'eval "$(zoxide init zsh)"' >> "$zshrc"
         info "Initialized zoxide in $zshrc"
     fi
-
     set_state "aliases" "configured"
 }
 
@@ -413,13 +391,11 @@ module_fonts() {
     local font_dir="$REAL_HOME/.local/share/fonts"
     execute mkdir -p "$font_dir"
     execute chown -R "$REAL_USER:$REAL_USER" "$(dirname "$font_dir")" 2>/dev/null || true
-    
     if ls "$font_dir"/JetBrainsMono* &>/dev/null; then
         info "JetBrainsMono Nerd Font already installed."
         set_state "fonts" "installed"
         return
     fi
-
     local temp_dir="/tmp/fonts_build"
     execute rm -rf "$temp_dir"
     execute mkdir -p "$temp_dir"
@@ -428,30 +404,22 @@ module_fonts() {
     execute chown -R "$REAL_USER:$REAL_USER" "$font_dir"
     execute fc-cache -f
     execute rm -rf "$temp_dir"
-    
     set_state "fonts" "installed"
 }
 
-# Task 2: Drift Detection in --status (Signal vs Noise)
 status() {
     echo -e "\n\e[34m[SYSTEM STATUS]\e[0m"
     for mod in "${ALL_MODULES[@]}"; do
         local current=$(get_tool_version "$mod")
         local required="${MIN_VERSIONS[$mod]}"
         local state_val=$(grep "^$mod=" "$STATE_FILE" 2>/dev/null | cut -d= -f2)
-
         if [[ "$mod" == "gitconfig" || "$mod" == "aliases" || "$mod" == "fonts" ]]; then
-            if [[ "$state_val" == "configured" || "$state_val" == "installed" ]]; then
-                echo -e "  $mod: $state_val \e[32m✓\e[0m"
-            else
-                echo -e "  $mod: \e[31mmissing ✗\e[0m"
-            fi
+            [[ "$state_val" == "configured" || "$state_val" == "installed" ]] && \
+                echo -e "  $mod: $state_val \e[32m✓\e[0m" || echo -e "  $mod: \e[31mmissing ✗\e[0m"
             continue
         fi
-
         local drift=""
         if [[ -n "$state_val" ]] && [[ "$state_val" != "$current" ]]; then
-            # Categorize drift
             if [[ "$current" == "none" ]]; then
                 drift=" (state=$state_val, system=missing - \e[31mCRITICAL DRIFT\e[0m)"
             elif version_ge "$current" "$state_val"; then
@@ -460,7 +428,6 @@ status() {
                 drift=" (state=$state_val, system=$current - \e[33msignal: regressed\e[0m)"
             fi
         fi
-
         if [[ "$current" == "none" ]]; then
              echo -e "  $mod: \e[31mmissing ✗\e[0m$drift"
         elif [[ -n "$required" ]] && ! version_ge "$current" "$required"; then
@@ -473,34 +440,19 @@ status() {
     exit 0
 }
 
-# --- Usage ---
 usage() {
     cat << EOF
-
 $(info "Bootstrap Environment Compiler")
 Role: Master Bash Scripter & Linux Environment Architect
-
 Usage: $0 [options]
-
 $(info "Core Commands:")
-  --all                Install and configure all modules defined in ALL_MODULES
-  --install [mods]     Comma-separated list of specific modules to install
-                       Example: $0 --install nvim,tmux,zsh
-  --status, status     Inspect the live system, compare against state, and report drift
-  --list, list         Display all available modules for installation
-
+  --all, --install [mods], --status, status, --list, list
 $(info "Engine Flags:")
-  --dry-run            Show proposed actions without modifying the system
-  --verbose            Enable detailed logging of every command executed
-  --help               Show this professional help documentation
-
+  --dry-run, --verbose, --help
 $(info "Available Modules:")
   $(echo "${ALL_MODULES[@]}" | sed 's/ /, /g')
-
 $(info "Documentation:")
-  Logs are persisted at: $LOG_FILE
-  State is tracked at:    $STATE_FILE
-
+  Logs: $LOG_FILE | State: $STATE_FILE
 EOF
     exit 0
 }
@@ -525,6 +477,12 @@ main() {
     parse_args "$@"
     detect_os
     setup_package_manager
+    
+    execute mkdir -p "$STATE_DIR"
+    execute chown -R "$REAL_USER:$REAL_USER" "$STATE_DIR" 2>/dev/null || true
+    exec > >(while read -r line; do echo "[$(date '+%Y-%m-%d %H:%M:%S')] $line"; done | tee -a "$LOG_FILE") 2>&1
+    trap 'error "Failed at line $LINENO – check $LOG_FILE"' ERR
+
     execute $PKG_UPDATE
     install_base_dependencies
     [[ ${#MODULES_TO_INSTALL[@]} -gt 0 ]] && module_dotfiles
@@ -542,14 +500,11 @@ main() {
             fonts) module_fonts ;;
         esac
     done
-
     success "Setup complete! Summary:"
     [[ -f "$STATE_FILE" ]] && sed 's/^/  ✓ /' "$STATE_FILE"
-    
-    # Task: Auto-enter Zsh if configured
     if [[ "$DRY_RUN" -eq 0 ]] && command -v zsh &>/dev/null; then
         info "Switching to Zsh session..."
-        exec zsh -l
+        exec sudo -u "$REAL_USER" zsh -l
     fi
 }
 
