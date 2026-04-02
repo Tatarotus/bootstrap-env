@@ -156,19 +156,34 @@ detect_os() {
 }
 
 # --- Package Manager Abstraction ---
+configure_debian_package_manager() {
+    if command -v nala &>/dev/null; then
+        PKG_MANAGER="nala"
+        PKG_INSTALL="$sudo_cmd nala install -y"
+        PKG_UPDATE="$sudo_cmd nala update"
+        return
+    fi
+
+    info "Attempting to install nala..."
+    execute $sudo_cmd apt-get update
+    if execute $sudo_cmd apt-get install -y nala; then
+        PKG_MANAGER="nala"
+        PKG_INSTALL="$sudo_cmd nala install -y"
+        PKG_UPDATE="$sudo_cmd nala update"
+    else
+        warn "nala is unavailable on this system. Falling back to apt-get."
+        PKG_MANAGER="apt-get"
+        PKG_INSTALL="$sudo_cmd apt-get install -y"
+        PKG_UPDATE="$sudo_cmd apt-get update"
+    fi
+}
+
 setup_package_manager() {
     sudo_cmd="sudo"
     [[ "$EUID" -eq 0 ]] && sudo_cmd=""
     case "$OS" in
         ubuntu|debian|mint|pop)
-            PKG_MANAGER="nala"
-            if ! command -v nala &>/dev/null; then
-                info "Installing nala..."
-                execute $sudo_cmd apt update
-                execute $sudo_cmd apt install -y nala
-            fi
-            PKG_INSTALL="$sudo_cmd nala install -y"
-            PKG_UPDATE="$sudo_cmd nala update"
+            configure_debian_package_manager
             ;;
         arch|manjaro)
             PKG_MANAGER="pacman"
@@ -190,13 +205,224 @@ setup_package_manager() {
 install_base_dependencies() {
     info "Installing base dependencies..."
     case "$OS" in
-        ubuntu|debian|mint|pop|fedora)
+        ubuntu|debian|mint|pop)
+            execute $PKG_INSTALL git curl stow unzip jq fd-find ripgrep fzf fontconfig
+            install_optional_cli_dependencies
+            ;;
+        fedora)
             execute $PKG_INSTALL git curl stow unzip jq fd-find ripgrep fzf zoxide eza fontconfig
             ;;
         arch|manjaro)
             execute $PKG_INSTALL git curl stow unzip jq fd ripgrep fzf zoxide eza fontconfig
             ;;
     esac
+}
+
+package_available() {
+    local package_name=$1
+    case "$PKG_MANAGER" in
+        nala|apt-get)
+            apt-cache show "$package_name" >/dev/null 2>&1
+            ;;
+        pacman)
+            pacman -Si "$package_name" >/dev/null 2>&1
+            ;;
+        dnf)
+            dnf info "$package_name" >/dev/null 2>&1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+install_optional_cli_dependencies() {
+    if ! command -v zoxide &>/dev/null; then
+        if package_available zoxide; then
+            execute $PKG_INSTALL zoxide
+        elif install_github_release_binary "ajeetdsouza/zoxide" "$(github_asset_pattern zoxide)" "zoxide"; then
+            :
+        elif ensure_cargo_available; then
+            install_cargo_tool zoxide zoxide
+        else
+            error "zoxide package is unavailable and cargo installation failed."
+        fi
+    fi
+
+    if ! command -v eza &>/dev/null; then
+        if package_available eza; then
+            execute $PKG_INSTALL eza
+        elif install_github_release_binary "eza-community/eza" "$(github_asset_pattern eza)" "eza"; then
+            :
+        elif ensure_cargo_available; then
+            install_cargo_tool eza eza
+        else
+            error "eza package is unavailable and cargo installation failed."
+        fi
+    fi
+}
+
+ensure_user_local_bin() {
+    local user_local_bin="$REAL_HOME/.local/bin"
+    execute mkdir -p "$user_local_bin"
+    execute chown -R "$REAL_USER:$REAL_USER" "$REAL_HOME/.local"
+    export PATH="$user_local_bin:$PATH"
+}
+
+github_asset_pattern() {
+    local tool_name=$1
+    case "$tool_name:$ARCH" in
+        zoxide:aarch64) echo 'aarch64-unknown-linux-musl\.tar\.gz$' ;;
+        zoxide:x86_64) echo 'x86_64-unknown-linux-musl\.tar\.gz$' ;;
+        eza:aarch64) echo 'eza_aarch64-unknown-linux-gnu_no_libgit\.tar\.gz$' ;;
+        eza:x86_64) echo 'eza_x86_64-unknown-linux-gnu_no_libgit\.tar\.gz$' ;;
+        yazi:aarch64) echo 'yazi-aarch64-unknown-linux-musl\.zip$' ;;
+        yazi:x86_64) echo 'yazi-x86_64-unknown-linux-musl\.zip$' ;;
+        *) return 1 ;;
+    esac
+}
+
+install_github_release_binary() {
+    local repo=$1
+    local asset_pattern=$2
+    local binary_name=$3
+    local api_url="https://api.github.com/repos/$repo/releases/latest"
+    local temp_dir="/tmp/${binary_name}_release"
+    local asset_url
+    local archive_name
+    local user_local_bin="$REAL_HOME/.local/bin"
+
+    [[ -z "$asset_pattern" ]] && return 1
+
+    ensure_user_local_bin
+    info "Installing $binary_name from GitHub releases for $ARCH..."
+
+    execute rm -rf "$temp_dir"
+    execute mkdir -p "$temp_dir"
+
+    asset_url=$(curl -fsSL "$api_url" | jq -r --arg pattern "$asset_pattern" '.assets[] | select(.name | test($pattern)) | .browser_download_url' | head -n1)
+    if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+        warn "No GitHub release asset matched pattern '$asset_pattern' for $binary_name."
+        execute rm -rf "$temp_dir"
+        return 1
+    fi
+
+    archive_name=$(basename "$asset_url")
+    execute curl -fsSL -o "$temp_dir/$archive_name" "$asset_url"
+    case "$archive_name" in
+        *.tar.gz) execute tar -xzf "$temp_dir/$archive_name" -C "$temp_dir" ;;
+        *.zip) execute unzip -o "$temp_dir/$archive_name" -d "$temp_dir" ;;
+        *)
+            warn "Unsupported archive format for $binary_name: $archive_name"
+            execute rm -rf "$temp_dir"
+            return 1
+            ;;
+    esac
+
+    local binary_path
+    binary_path=$(find "$temp_dir" -type f -name "$binary_name" | head -n1)
+    if [[ -z "$binary_path" ]]; then
+        warn "Downloaded archive for $binary_name did not contain an expected binary."
+        execute rm -rf "$temp_dir"
+        return 1
+    fi
+
+    execute install -m 755 "$binary_path" "$user_local_bin/$binary_name"
+    execute chown "$REAL_USER:$REAL_USER" "$user_local_bin/$binary_name"
+    execute rm -rf "$temp_dir"
+    export PATH="$user_local_bin:$PATH"
+    command -v "$binary_name" &>/dev/null
+}
+
+install_yazi_release_binary() {
+    local asset_pattern
+    local api_url="https://api.github.com/repos/sxyazi/yazi/releases/latest"
+    local temp_dir="/tmp/yazi_release"
+    local asset_url
+    local archive_name
+    local user_local_bin="$REAL_HOME/.local/bin"
+
+    asset_pattern=$(github_asset_pattern yazi) || return 1
+    ensure_user_local_bin
+    info "Installing yazi from GitHub releases for $ARCH..."
+
+    execute rm -rf "$temp_dir"
+    execute mkdir -p "$temp_dir"
+
+    asset_url=$(curl -fsSL "$api_url" | jq -r --arg pattern "$asset_pattern" '.assets[] | select(.name | test($pattern)) | .browser_download_url' | head -n1)
+    if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+        warn "No GitHub release asset matched pattern '$asset_pattern' for yazi."
+        execute rm -rf "$temp_dir"
+        return 1
+    fi
+
+    archive_name=$(basename "$asset_url")
+    execute curl -fsSL -o "$temp_dir/$archive_name" "$asset_url"
+    execute unzip -o "$temp_dir/$archive_name" -d "$temp_dir"
+
+    local yazi_path
+    local ya_path
+    yazi_path=$(find "$temp_dir" -type f -name yazi | head -n1)
+    ya_path=$(find "$temp_dir" -type f -name ya | head -n1)
+
+    if [[ -z "$yazi_path" || -z "$ya_path" ]]; then
+        warn "Downloaded yazi archive did not contain both 'yazi' and 'ya' binaries."
+        execute rm -rf "$temp_dir"
+        return 1
+    fi
+
+    execute install -m 755 "$yazi_path" "$user_local_bin/yazi"
+    execute install -m 755 "$ya_path" "$user_local_bin/ya"
+    execute chown "$REAL_USER:$REAL_USER" "$user_local_bin/yazi"
+    execute chown "$REAL_USER:$REAL_USER" "$user_local_bin/ya"
+    execute rm -rf "$temp_dir"
+    export PATH="$user_local_bin:$PATH"
+    command -v yazi &>/dev/null && command -v ya &>/dev/null
+}
+
+ensure_cargo_available() {
+    if command -v cargo &>/dev/null; then
+        return 0
+    fi
+
+    info "Installing cargo for user-scoped CLI tools..."
+    case "$OS" in
+        ubuntu|debian|mint|pop)
+            execute $PKG_INSTALL cargo rustc
+            ;;
+        fedora)
+            execute $PKG_INSTALL cargo rust
+            ;;
+        arch|manjaro)
+            execute $PKG_INSTALL rust
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    command -v cargo &>/dev/null
+}
+
+install_cargo_tool() {
+    local binary_name=$1
+    local crate_name=$2
+    local cargo_bin_dir="$REAL_HOME/.cargo/bin"
+
+    if [[ -x "$cargo_bin_dir/$binary_name" ]]; then
+        export PATH="$cargo_bin_dir:$PATH"
+        return 0
+    fi
+
+    info "Installing $binary_name with cargo for $REAL_USER..."
+    if [[ "$EUID" -eq 0 ]]; then
+        execute sudo -u "$REAL_USER" env HOME="$REAL_HOME" cargo install --locked "$crate_name"
+    else
+        execute env HOME="$REAL_HOME" cargo install --locked "$crate_name"
+    fi
+
+    export PATH="$cargo_bin_dir:$PATH"
+    command -v "$binary_name" &>/dev/null || [[ -x "$cargo_bin_dir/$binary_name" ]]
 }
 
 install_build_dependencies() {
@@ -232,7 +458,21 @@ module_dotfiles() {
         execute chown -R "$REAL_USER:$REAL_USER" "$DOTFILES_DIR"
     elif [[ -d "$DOTFILES_DIR/.git" ]]; then
         info "Dotfiles already cloned at $DOTFILES_DIR. Pulling latest (autostash enabled)..."
-        (cd "$DOTFILES_DIR" && execute git pull --rebase --autostash)
+        (
+            cd "$DOTFILES_DIR"
+            local current_branch
+            current_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
+            execute git fetch origin
+            if git show-ref --verify --quiet refs/remotes/origin/main; then
+                if [[ "$current_branch" != "main" ]]; then
+                    execute git checkout -B main origin/main
+                fi
+                execute git branch --set-upstream-to=origin/main main
+                execute git pull --rebase --autostash origin main
+            else
+                execute git pull --rebase --autostash
+            fi
+        )
     else
         warn "$DOTFILES_DIR exists but is not a git repository. Skipping pull."
     fi
@@ -317,12 +557,23 @@ module_tmux() {
 module_yazi() {
     if ! command -v yazi &>/dev/null; then
         case "$OS" in
-            ubuntu|debian|mint|pop|fedora) execute $PKG_INSTALL ffmpeg 7zip poppler-utils ;;
+            ubuntu|debian|mint|pop) execute $PKG_INSTALL ffmpeg p7zip-full poppler-utils ;;
+            fedora) execute $PKG_INSTALL ffmpeg p7zip poppler-utils ;;
             arch|manjaro) execute $PKG_INSTALL ffmpeg 7z poppler ;;
         esac
         case "$OS" in
             arch|manjaro|fedora) execute $PKG_INSTALL yazi ;;
-            *) command -v cargo &>/dev/null && execute cargo install --locked yazi-fm yazi-cli ;;
+            ubuntu|debian|mint|pop)
+                if package_available yazi; then
+                    execute $PKG_INSTALL yazi
+                elif install_yazi_release_binary; then
+                    :
+                elif ensure_cargo_available; then
+                    execute env HOME="$REAL_HOME" PATH="$REAL_HOME/.cargo/bin:$PATH" cargo install --locked yazi-fm yazi-cli
+                else
+                    error "yazi package is unavailable and fallback installation failed."
+                fi
+                ;;
         esac
     fi
     set_state "yazi" "$(get_tool_version yazi)"
@@ -380,14 +631,36 @@ module_node() {
 
 module_aliases() {
     info "Configuring personal aliases for $REAL_USER..."
+    install_optional_cli_dependencies
     local zshrc="$REAL_HOME/.zshrc"
+    local cargo_bin_dir="$REAL_HOME/.cargo/bin"
+    export PATH="$cargo_bin_dir:$PATH"
+    local alias_ls="eza --icons"
+    local alias_ll="eza -lah --icons"
+    local alias_la="eza -A --icons"
+    local alias_lt="eza --tree --icons"
+    local alias_l="eza -CF --icons"
+    if ! command -v eza &>/dev/null; then
+        error "eza is required for aliases but is not installed."
+    fi
     [[ ! -f "$zshrc" ]] && execute touch "$zshrc" && execute chown "$REAL_USER:$REAL_USER" "$zshrc"
+
+    upsert_zsh_line() {
+        local pattern=$1
+        local replacement=$2
+        if grep -qE "$pattern" "$zshrc" 2>/dev/null; then
+            execute sed -i -E "s|$pattern.*|$replacement|" "$zshrc"
+        else
+            printf '%s\n' "$replacement" >> "$zshrc"
+        fi
+    }
+
     declare -A aliases=(
-        [ls]="eza --icons"
-        [ll]="eza -lah --icons"
-        [la]="eza -A --icons"
-        [lt]="eza --tree --icons"
-        [l]="eza -CF --icons"
+        [ls]="$alias_ls"
+        [ll]="$alias_ll"
+        [la]="$alias_la"
+        [lt]="$alias_lt"
+        [l]="$alias_l"
         [gs]="git status"
         [ga]="git add"
         [gc]="git commit"
@@ -398,14 +671,17 @@ module_aliases() {
     )
     for key in "${!aliases[@]}"; do
         local val="${aliases[$key]}"
-        if ! grep -q "alias $key=" "$zshrc" 2>/dev/null; then
-            echo "alias $key='$val'" >> "$zshrc"
-            info "Added alias: $key"
-        fi
+        upsert_zsh_line "^alias ${key}=" "alias ${key}='${val}'"
+        info "Configured alias: $key"
     done
-    if ! grep -q "zoxide init zsh" "$zshrc" 2>/dev/null; then
-        echo 'eval "$(zoxide init zsh)"' >> "$zshrc"
+
+    upsert_zsh_line '^export PATH="\$HOME/\.cargo/bin:\$PATH"' 'export PATH="$HOME/.cargo/bin:$PATH"'
+
+    if command -v zoxide &>/dev/null; then
+        upsert_zsh_line '^eval "\$\(zoxide init zsh\)"' 'eval "$(zoxide init zsh)"'
         info "Initialized zoxide in $zshrc"
+    else
+        error "zoxide is required for aliases but is not installed."
     fi
     set_state "aliases" "configured"
 }
