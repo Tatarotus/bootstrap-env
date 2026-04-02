@@ -14,7 +14,7 @@ VERBOSE=0
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/Tatarotus/dotfiles}"
 DOTFILES_DIR="${DOTFILES_DIR:-$HOME/.dotfiles}"
 MODULES_TO_INSTALL=()
-ALL_MODULES=("nvim" "zsh" "starship" "alacritty" "tmux" "yazi" "gitconfig" "node" "aliases")
+ALL_MODULES=("nvim" "zsh" "starship" "alacritty" "tmux" "yazi" "gitconfig" "node" "aliases" "fonts")
 
 # Ensure /usr/local/bin is in PATH for the script's duration
 export PATH="/usr/local/bin:$PATH"
@@ -104,6 +104,8 @@ execute() {
 
             if [[ $exit_code -eq 0 ]]; then
                 success=1
+                # Refresh command hash table so new binaries are found immediately
+                hash -r 2>/dev/null || true
                 break
             else
                 retry_count=$((retry_count + 1))
@@ -178,10 +180,10 @@ install_base_dependencies() {
     info "Installing base dependencies..."
     case "$OS" in
         ubuntu|debian|mint|pop|fedora)
-            execute $PKG_INSTALL git curl stow unzip jq fd-find ripgrep fzf zoxide eza
+            execute $PKG_INSTALL git curl stow unzip jq fd-find ripgrep fzf zoxide eza fontconfig
             ;;
         arch|manjaro)
-            execute $PKG_INSTALL git curl stow unzip jq fd ripgrep fzf zoxide eza
+            execute $PKG_INSTALL git curl stow unzip jq fd ripgrep fzf zoxide eza fontconfig
             ;;
     esac
 }
@@ -395,6 +397,28 @@ module_aliases() {
     set_state "aliases" "configured"
 }
 
+module_fonts() {
+    info "Installing JetBrainsMono Nerd Font..."
+    local font_dir="$HOME/.local/share/fonts"
+    execute mkdir -p "$font_dir"
+    
+    if ls "$font_dir"/JetBrainsMono* &>/dev/null; then
+        info "JetBrainsMono Nerd Font already installed."
+        set_state "fonts" "installed"
+        return
+    fi
+
+    local temp_dir="/tmp/fonts_build"
+    execute rm -rf "$temp_dir"
+    execute mkdir -p "$temp_dir"
+    execute "curl -fLo $temp_dir/JetBrainsMono.zip https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip"
+    execute "unzip -o $temp_dir/JetBrainsMono.zip -d $font_dir"
+    execute fc-cache -f
+    execute rm -rf "$temp_dir"
+    
+    set_state "fonts" "installed"
+}
+
 # Task 2: Drift Detection in --status (Signal vs Noise)
 status() {
     echo -e "\n\e[34m[SYSTEM STATUS]\e[0m"
@@ -502,10 +526,18 @@ main() {
             gitconfig) module_gitconfig ;;
             node) module_node ;;
             aliases) module_aliases ;;
+            fonts) module_fonts ;;
         esac
     done
+
     success "Setup complete! Summary:"
     [[ -f "$STATE_FILE" ]] && sed 's/^/  ✓ /' "$STATE_FILE"
+    
+    # Task: Auto-enter Zsh if configured
+    if [[ "$DRY_RUN" -eq 0 ]] && command -v zsh &>/dev/null; then
+        info "Switching to Zsh session..."
+        exec zsh -l
+    fi
 }
 
 main "$@"
