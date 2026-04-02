@@ -12,7 +12,12 @@ trap 'exit 1' ERR
 DRY_RUN=0
 VERBOSE=0
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/Tatarotus/dotfiles}"
-DOTFILES_DIR="${DOTFILES_DIR:-$HOME/.dotfiles}"
+
+# Task: Handle REAL_USER and REAL_HOME even if run with sudo
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+
+DOTFILES_DIR="${DOTFILES_DIR:-$REAL_HOME/.dotfiles}"
 MODULES_TO_INSTALL=()
 ALL_MODULES=("nvim" "zsh" "starship" "alacritty" "tmux" "yazi" "gitconfig" "node" "aliases" "fonts")
 
@@ -28,11 +33,14 @@ declare -A MIN_VERSIONS=(
 )
 
 # --- State & Logging ---
-STATE_DIR="$HOME/.local/share/bootstrap"
+# Use REAL_HOME for persistent state and logs
+STATE_DIR="$REAL_HOME/.local/share/bootstrap"
 STATE_FILE="$STATE_DIR/state"
 LOG_FILE="$STATE_DIR/setup.log"
 
-mkdir -p "$STATE_DIR"
+execute mkdir -p "$STATE_DIR"
+execute chown -R "$REAL_USER:$REAL_USER" "$STATE_DIR" 2>/dev/null || true
+
 exec > >(while read -r line; do echo "[$(date '+%Y-%m-%d %H:%M:%S')] $line"; done | tee -a "$LOG_FILE") 2>&1
 trap 'error "Failed at line $LINENO – check $LOG_FILE"' ERR
 
@@ -215,10 +223,13 @@ stow_module() {
 
 # --- Module: Dotfiles ---
 module_dotfiles() {
+    info "Setting up Dotfiles for $REAL_USER..."
     if [[ ! -d "$DOTFILES_DIR" ]]; then
         execute git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
+        execute chown -R "$REAL_USER:$REAL_USER" "$DOTFILES_DIR"
     else
-        (cd "$DOTFILES_DIR" && execute git pull)
+        info "Dotfiles already cloned at $DOTFILES_DIR. Pulling latest (autostash enabled)..."
+        (cd "$DOTFILES_DIR" && execute git pull --rebase --autostash)
     fi
     command -v stow &>/dev/null || execute $PKG_INSTALL stow
 }
@@ -359,11 +370,11 @@ module_node() {
 }
 
 module_aliases() {
-    info "Configuring personal aliases..."
-    local zshrc="$HOME/.zshrc"
+    info "Configuring personal aliases for $REAL_USER..."
+    local zshrc="$REAL_HOME/.zshrc"
     
     # Ensure .zshrc exists
-    touch "$zshrc"
+    [[ ! -f "$zshrc" ]] && execute touch "$zshrc" && execute chown "$REAL_USER:$REAL_USER" "$zshrc"
 
     declare -A aliases=(
         [ls]="eza --icons"
@@ -382,25 +393,26 @@ module_aliases() {
 
     for key in "${!aliases[@]}"; do
         local val="${aliases[$key]}"
-        if ! grep -q "alias $key=" "$zshrc"; then
+        if ! grep -q "alias $key=" "$zshrc" 2>/dev/null; then
             echo "alias $key='$val'" >> "$zshrc"
             info "Added alias: $key"
         fi
     done
 
     # Initialize zoxide (z) in zshrc if not present
-    if ! grep -q "zoxide init zsh" "$zshrc"; then
+    if ! grep -q "zoxide init zsh" "$zshrc" 2>/dev/null; then
         echo 'eval "$(zoxide init zsh)"' >> "$zshrc"
-        info "Initialized zoxide in .zshrc"
+        info "Initialized zoxide in $zshrc"
     fi
 
     set_state "aliases" "configured"
 }
 
 module_fonts() {
-    info "Installing JetBrainsMono Nerd Font..."
-    local font_dir="$HOME/.local/share/fonts"
+    info "Installing JetBrainsMono Nerd Font for $REAL_USER..."
+    local font_dir="$REAL_HOME/.local/share/fonts"
     execute mkdir -p "$font_dir"
+    execute chown -R "$REAL_USER:$REAL_USER" "$(dirname "$font_dir")" 2>/dev/null || true
     
     if ls "$font_dir"/JetBrainsMono* &>/dev/null; then
         info "JetBrainsMono Nerd Font already installed."
@@ -413,6 +425,7 @@ module_fonts() {
     execute mkdir -p "$temp_dir"
     execute curl -fLo "$temp_dir/JetBrainsMono.zip" "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip"
     execute unzip -o "$temp_dir/JetBrainsMono.zip" -d "$font_dir"
+    execute chown -R "$REAL_USER:$REAL_USER" "$font_dir"
     execute fc-cache -f
     execute rm -rf "$temp_dir"
     
@@ -427,9 +440,9 @@ status() {
         local required="${MIN_VERSIONS[$mod]}"
         local state_val=$(grep "^$mod=" "$STATE_FILE" 2>/dev/null | cut -d= -f2)
 
-        if [[ "$mod" == "gitconfig" || "$mod" == "aliases" ]]; then
-            if [[ "$state_val" == "configured" ]]; then
-                echo -e "  $mod: configured \e[32m✓\e[0m"
+        if [[ "$mod" == "gitconfig" || "$mod" == "aliases" || "$mod" == "fonts" ]]; then
+            if [[ "$state_val" == "configured" || "$state_val" == "installed" ]]; then
+                echo -e "  $mod: $state_val \e[32m✓\e[0m"
             else
                 echo -e "  $mod: \e[31mmissing ✗\e[0m"
             fi
