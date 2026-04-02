@@ -29,53 +29,38 @@
 ```
 
 ## 4. Commands Executed
-- [2026-04-01 12:00] `uname -a && bash --version && git --version && ls -R` -> Gathered system info and project structure.
-- [2026-04-01 12:01] `read_file GOAL.md` & `read_file README.md` -> Understood project goals and features.
-- [2026-04-01 12:05] `read_file setup.sh` -> Analyzed current implementation of the bootstrap script.
-- [2026-04-01 12:15] `sed`, `grep`, `replace` -> Modified `setup.sh` to add `yazi` and `gitconfig` modules, and improve idempotency.
-- [2026-04-01 12:20] `./setup.sh --all --dry-run` -> Validated the script and fixed syntax errors.
-- [2026-04-01 12:40] `replace` -> Added `--list` and `list` options to `setup.sh`.
-- [2026-04-01 12:41] `./setup.sh --list` & `./setup.sh list` -> Verified the module lister works.
-- [2026-04-01 13:00] `replace` -> Added centralized dependencies (Task 1).
-- [2026-04-01 13:05] `replace` -> Added robust logging and error trap (Task 2).
-- [2026-04-01 13:10] `replace` -> Added state tracking and deep idempotency version checks (Tasks 3 and 4).
-- [2026-04-01 13:20] `replace` -> Added post-install hook UX polish (Task 5) and security/configurability overrides (Task 6).
-- [2026-04-01 13:25] `./setup.sh --all --dry-run` -> Validated all senior sysops improvements successfully.
+- [2026-04-01 12:00] `uname -a && bash --version && git --version && ls -R` -> Gathered system info.
+- [2026-04-01 12:01] `read_file GOAL.md` & `read_file README.md` -> Understood project goals.
+- [2026-04-01 12:05] `read_file setup.sh` -> Analyzed current implementation.
+- [2026-04-01 13:25] Senior SysOps refactor (Tasks 1-6) -> Hardened state, versioning, and logging.
+- [2026-04-01 18:40] `replace` -> Added `--list`, categorized drift, and fixed pre-release versioning logic.
+- [2026-04-01 19:54] `replace` -> Added retry logic and `apt-get` fallback for robust package management.
+- [2026-04-01 20:30] `replace` -> Added `node`, `aliases`, `zoxide`, and `eza` modules.
+- [2026-04-01 21:15] `replace` -> Added `fonts` (JetBrainsMono Nerd Font) and `auto-enter-zsh`.
+- [2026-04-01 22:00] `write_file` -> Structural overhaul to fix "execute not found" and `SUDO_USER` pathing.
 
 ## 5. Test Runs
 - [2026-04-01 12:20] `./setup.sh --all --dry-run` -> **PASS**.
-- [2026-04-01 12:41] `./setup.sh --list` -> **PASS**. Output: `nvim, zsh, starship, alacritty, tmux, yazi, gitconfig`.
-- [2026-04-01 13:25] `./setup.sh --all --dry-run` -> **PASS**. Logged correctly to `~/.local/share/bootstrap/setup.log`, extracted versions, updated state safely in dry-run mode, and showed final UX hook.
+- [2026-04-01 13:25] `./setup.sh --all --dry-run` (Senior Refactor) -> **PASS**.
+- [2026-04-01 21:40] Docker validation (Arch, Ubuntu, Fedora) -> **PASS** (with gitconfig stow warning).
 
 ## 6. Key Decisions & Architecture Notes
-- **Modular Design:** Each tool is its own module.
-- **Abstraction:** Package manager commands abstracted.
-- **Idempotency:** Implemented deep version checks and a state layer (`~/.local/share/bootstrap/state`). Tool skips install if version matches or already present.
-- **Dry-Run Wrapper:** `execute()` function wraps commands and state sets natively.
-- **Module Lister:** Added a dedicated `list_modules` function for discoverability.
-- **Dependencies:** Centralized `install_base_dependencies` and `install_build_dependencies` to avoid duplicated `PKG_INSTALL` commands.
-- **Error Trapping:** `exec > >(tee -a log) 2>&1` + `trap ERR` implemented.
+- **Source of Truth:** The actual system is the primary source of truth; the state file acts as a cache/record of intent.
+- **Permission Handling:** Implemented `REAL_USER` and `REAL_HOME` logic to ensure personal configurations (dotfiles, aliases, fonts) are correctly mapped even when run with `sudo`.
+- **Atomicity (Reasoning):** Discussed "Stage and Swap" pattern for future production hardening.
+- **Reproducibility:** Shifted to a Manifest-centric architecture (conditional logic per distro).
 
 ## 7. Issues & Resolutions
-- **Issue:** Dependency duplication across modules. **Resolution:** Created centralized base and build dependency layers.
-- **Issue:** Idempotency lacked depth (e.g. version checking). **Resolution:** Added `get_tool_version` regex check to fetch tool versions, paired with `set_state` state persistence.
-- **Issue:** No persistent logging. **Resolution:** Redirected execution stdout/stderr to tee with a setup log file.
-- **Issue:** Curl scripts present risk. **Resolution:** Added info warning on `starship` module regarding curl pipe execution.
+- **Issue:** "execute: command not found". **Resolution:** Moved helper function definitions to the top of the script.
+- **Issue:** Permission denied on `.local/share`. **Resolution:** Forced `chown` to `REAL_USER` after directory creation.
+- **Issue:** Git pull failure with unstaged changes. **Resolution:** Added `--rebase --autostash` to `module_dotfiles`.
 
 ## 8. Current Status & Next Steps
-- [x] Initial research and project understanding.
-- [x] Creation of `MEMORY.md`.
-- [x] Analysis of `setup.sh`.
-- [x] Implement `yazi` module.
-- [x] Improve idempotency for `nvim`, `starship`, and `alacritty`.
-- [x] Add `git config` module.
-- [x] Update `ALL_MODULES` and main loop for new modules.
-- [x] Add `--list` / `list` option.
-- [x] Centralize dependency layer.
-- [x] Add logging and error trap.
-- [x] State tracking and version checks.
-- [x] Post-install UX hook.
-- [x] Overridable configuration environments.
-- [ ] Bonus: Profile flags (`--profile`).
-- [ ] Bonus: Status command (`--status`).
-- [ ] Bonus: Self-update.
+- [x] Hardened version semantics.
+- [x] Explicit drift categorization.
+- [x] Quiet Git idempotency.
+- [x] `SUDO_USER` awareness.
+- [x] Nerd Font installation.
+- [x] Node.js and improved aliases.
+- [ ] Implement Functional Verifiers (Smoke Tests).
+- [ ] YAML Manifest for environment pinning.

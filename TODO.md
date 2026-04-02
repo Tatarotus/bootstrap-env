@@ -7,17 +7,24 @@
 - [x] Implement architecture detection (`x86_64` vs `aarch64`).
 
 ## Phase 2: Application Modules
-- [x] **Neovim:** Write source-build logic (install dependencies based on OS, clone stable, make, make install).
-- [x] **Zsh:** Write install logic, change default shell via `chsh`, and ensure `stow zsh` is executed.
-- [x] **Starship:** Write install logic (via official curl script) and execute `stow starship`.
-- [x] **Alacritty:** Write install/build logic (requires Rust/Cargo depending on distro) and execute `stow alacritty`.
-- [x] **Tmux:** Write install logic and execute `stow tmux`.
+- [x] **Neovim:** Write source-build logic.
+- [x] **Zsh:** Write install logic and shell switching.
+- [x] **Starship:** Write install logic.
+- [x] **Alacritty:** Write install/build logic.
+- [x] **Tmux:** Write install logic.
+- [x] **Yazi:** Write install logic.
+- [x] **Node.js:** Support for nvim plugins.
+- [x] **Fonts:** JetBrainsMono Nerd Font.
+- [x] **Aliases:** Enhanced aliases with eza and zoxide.
 
 ## Phase 3: Polish
-- [x] Verify idempotency (script doesn't fail if run twice).
-- [x] Verify `--dry-run` captures all system-modifying commands.
-- [x] Test on an Arch Linux container/VM (Simulated/Verified logic).
-- [x] Test on a Debian/Ubuntu container/VM (Verified on Ubuntu host).
+- [x] Verify idempotency.
+- [x] Verify `--dry-run`.
+- [x] Test on Arch Linux container.
+- [x] Test on Debian/Ubuntu container.
+- [x] Test on Fedora container.
+- [x] Explicit drift detection in `--status`.
+- [x] `SUDO_USER` awareness for correct pathing.
 
  Your Next Tasks (Prioritized – Do in This Order)
  Task 1 – Centralized Dependency Layer (Biggest win) - [x] Done
