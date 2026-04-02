@@ -13,6 +13,11 @@ DRY_RUN=0
 VERBOSE=0
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/Tatarotus/dotfiles}"
 
+VERIFY_MODE=0
+MODULES_TO_VERIFY=()
+VERIFY_PASS_COUNT=0
+VERIFY_FAIL_COUNT=0
+
 # Task: Handle REAL_USER and REAL_HOME even if run with sudo
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
@@ -37,8 +42,19 @@ info() { echo -e "\e[34m[INFO]\e[0m $*"; }
 warn() { echo -e "\e[33m[WARN]\e[0m $*"; }
 error() { echo -e "\e[31m[ERROR]\e[0m $*"; exit 1; }
 success() { echo -e "\e[32m[SUCCESS]\e[0m $*"; }
+error_no_exit() { echo -e "\e[31m[ERROR]\e[0m $*"; }
 
 # --- Logic Helpers ---
+validate_modules() {
+    local -n mods=$1
+    local valid_mods=" ${ALL_MODULES[*]} "
+    for mod in "${mods[@]}"; do
+        if [[ ! "$valid_mods" =~ " $mod " ]]; then
+            error "Unknown module: $mod"
+        fi
+    done
+}
+
 get_tool_version() {
     local cmd=$1
     if ! command -v "$cmd" &>/dev/null; then
@@ -407,6 +423,274 @@ module_fonts() {
     set_state "fonts" "installed"
 }
 
+# --- Verification Helpers ---
+record_verify_result() {
+    local module=$1
+    local status=$2
+    local message=$3
+    if [[ "$status" == "pass" ]]; then
+        success "$module: $message"
+        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+    else
+        error_no_exit "$module: $message"
+        VERIFY_FAIL_COUNT=$((VERIFY_FAIL_COUNT + 1))
+    fi
+}
+
+verify_tool_exists() {
+    local cmd=$1
+    if command -v "$cmd" &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+verify_tool_min_version() {
+    local cmd=$1
+    local required=$2
+    local current=$(get_tool_version "$cmd")
+    if [[ "$current" == "none" ]]; then
+        return 1
+    fi
+    if version_ge "$current" "$required"; then
+        return 0
+    fi
+    return 1
+}
+
+verify_dotfiles_module_present() {
+    local module=$1
+    if [[ -d "$DOTFILES_DIR/$module" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+verify_git_config() {
+    local key=$1
+    local expected=$2
+    local current=$(sudo -u "$REAL_USER" git config --global "$key" || echo "")
+    if [[ "$current" == "$expected" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# --- Verifiers ---
+verify_nvim() {
+    local errors=()
+    if ! verify_tool_exists nvim; then
+        errors+=("executable missing")
+    else
+        if ! verify_tool_min_version nvim "${MIN_VERSIONS[nvim]}"; then
+            errors+=("version $(get_tool_version nvim) < ${MIN_VERSIONS[nvim]}")
+        fi
+    fi
+    if ! verify_dotfiles_module_present nvim; then
+        errors+=("dotfiles module missing")
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "nvim" "pass" "executable present, version ok, dotfiles present"
+    else
+        record_verify_result "nvim" "fail" "${errors[*]}"
+    fi
+}
+
+verify_zsh() {
+    local errors=()
+    if ! verify_tool_exists zsh; then
+        errors+=("executable missing")
+    else
+        local zsh_path=$(command -v zsh)
+        local login_shell=$(getent passwd "$REAL_USER" | cut -d: -f7)
+        if [[ "$login_shell" != "$zsh_path" ]]; then
+            errors+=("login shell is $login_shell instead of $zsh_path")
+        fi
+    fi
+    if ! verify_dotfiles_module_present zsh; then
+        errors+=("dotfiles module missing")
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "zsh" "pass" "executable present, login shell ok, dotfiles present"
+    else
+        record_verify_result "zsh" "fail" "${errors[*]}"
+    fi
+}
+
+verify_starship() {
+    local errors=()
+    if ! verify_tool_exists starship; then
+        errors+=("executable missing")
+    else
+        if ! verify_tool_min_version starship "${MIN_VERSIONS[starship]}"; then
+            errors+=("version $(get_tool_version starship) < ${MIN_VERSIONS[starship]}")
+        fi
+    fi
+    if ! verify_dotfiles_module_present starship; then
+        errors+=("dotfiles module missing")
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "starship" "pass" "executable present, version ok, dotfiles present"
+    else
+        record_verify_result "starship" "fail" "${errors[*]}"
+    fi
+}
+
+verify_alacritty() {
+    local errors=()
+    if ! verify_tool_exists alacritty; then
+        errors+=("executable missing")
+    else
+        if ! alacritty --version &>/dev/null && ! alacritty --help &>/dev/null; then
+            errors+=("does not respond to version/help")
+        fi
+    fi
+    if ! verify_dotfiles_module_present alacritty; then
+        errors+=("dotfiles module missing")
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "alacritty" "pass" "executable present, responds to commands, dotfiles present"
+    else
+        record_verify_result "alacritty" "fail" "${errors[*]}"
+    fi
+}
+
+verify_tmux() {
+    local errors=()
+    if ! verify_tool_exists tmux; then
+        errors+=("executable missing")
+    else
+        if ! verify_tool_min_version tmux "${MIN_VERSIONS[tmux]}"; then
+            errors+=("version $(get_tool_version tmux) < ${MIN_VERSIONS[tmux]}")
+        fi
+        local session_name="verify_test_$$"
+        if tmux new-session -d -s "$session_name" 2>/dev/null; then
+            tmux kill-session -t "$session_name" 2>/dev/null
+        else
+            errors+=("failed to create detached session")
+        fi
+    fi
+    if ! verify_dotfiles_module_present tmux; then
+        errors+=("dotfiles module missing")
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "tmux" "pass" "executable present, version ok, session test passed, dotfiles present"
+    else
+        record_verify_result "tmux" "fail" "${errors[*]}"
+    fi
+}
+
+verify_yazi() {
+    local errors=()
+    if ! verify_tool_exists yazi; then
+        errors+=("executable missing")
+    else
+        if ! yazi --version &>/dev/null && ! yazi --help &>/dev/null; then
+            errors+=("does not respond to version/help")
+        fi
+    fi
+    if ! verify_dotfiles_module_present yazi; then
+        errors+=("dotfiles module missing")
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "yazi" "pass" "executable present, responds to commands, dotfiles present"
+    else
+        record_verify_result "yazi" "fail" "${errors[*]}"
+    fi
+}
+
+verify_gitconfig() {
+    local errors=()
+    if ! verify_git_config "init.defaultBranch" "main"; then
+        errors+=("init.defaultBranch mismatch")
+    fi
+    if ! verify_git_config "pull.rebase" "true"; then
+        errors+=("pull.rebase mismatch")
+    fi
+    if ! verify_git_config "core.editor" "nvim"; then
+        errors+=("core.editor mismatch")
+    fi
+    if ! verify_dotfiles_module_present gitconfig; then
+        errors+=("dotfiles module missing")
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "gitconfig" "pass" "git configuration matches expected values, dotfiles present"
+    else
+        record_verify_result "gitconfig" "fail" "${errors[*]}"
+    fi
+}
+
+verify_node() {
+    local errors=()
+    if ! verify_tool_exists node; then
+        errors+=("executable missing")
+    else
+        local ver=$(node --version 2>/dev/null)
+        if [[ -z "$ver" ]]; then
+            errors+=("failed to get version string")
+        fi
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "node" "pass" "executable present, version ok"
+    else
+        record_verify_result "node" "fail" "${errors[*]}"
+    fi
+}
+
+verify_aliases() {
+    local errors=()
+    local zshrc="$REAL_HOME/.zshrc"
+    if [[ ! -f "$zshrc" ]]; then
+        errors+=("$zshrc missing")
+    else
+        declare -A aliases=(
+            [ls]="eza --icons"
+            [ll]="eza -lah --icons"
+            [la]="eza -A --icons"
+            [lt]="eza --tree --icons"
+            [l]="eza -CF --icons"
+            [gs]="git status"
+            [ga]="git add"
+            [gc]="git commit"
+            [gp]="git push"
+            [v]="nvim"
+            [y]="yazi"
+            [z]="z"
+        )
+        for key in "${!aliases[@]}"; do
+            if ! grep -q "alias $key=" "$zshrc" 2>/dev/null; then
+                errors+=("alias $key missing")
+            fi
+        done
+        if ! grep -q "zoxide init zsh" "$zshrc" 2>/dev/null; then
+            errors+=("zoxide init zsh missing")
+        fi
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "aliases" "pass" "expected aliases and init scripts present"
+    else
+        record_verify_result "aliases" "fail" "${errors[*]}"
+    fi
+}
+
+verify_fonts() {
+    local errors=()
+    local font_dir="$REAL_HOME/.local/share/fonts"
+    if ! ls "$font_dir"/JetBrainsMono* &>/dev/null; then
+        errors+=("JetBrainsMono files missing in $font_dir")
+    fi
+    if verify_tool_exists fc-list; then
+        if ! fc-list | grep -iq "JetBrainsMono"; then
+            errors+=("fc-list cannot resolve JetBrainsMono")
+        fi
+    fi
+    if [[ ${#errors[@]} -eq 0 ]]; then
+        record_verify_result "fonts" "pass" "font files present and discoverable"
+    else
+        record_verify_result "fonts" "fail" "${errors[*]}"
+    fi
+}
+
 status() {
     echo -e "\n\e[34m[SYSTEM STATUS]\e[0m"
     for mod in "${ALL_MODULES[@]}"; do
@@ -446,7 +730,7 @@ $(info "Bootstrap Environment Compiler")
 Role: Master Bash Scripter & Linux Environment Architect
 Usage: $0 [options]
 $(info "Core Commands:")
-  --all, --install [mods], --status, status, --list, list
+  --all, --install [mods], --verify [mods], --status, status, --list, list
 $(info "Engine Flags:")
   --dry-run, --verbose, --help
 $(info "Available Modules:")
@@ -463,6 +747,17 @@ parse_args() {
         case "$1" in
             --all) MODULES_TO_INSTALL=("${ALL_MODULES[@]}"); shift ;;
             --install) IFS=',' read -ra ADDR <<< "$2"; MODULES_TO_INSTALL+=("${ADDR[@]}"); shift 2 ;;
+            --verify)
+                VERIFY_MODE=1
+                if [[ -n "$2" && "$2" != --* ]]; then
+                    IFS=',' read -ra ADDR <<< "$2"
+                    MODULES_TO_VERIFY+=("${ADDR[@]}")
+                    shift 2
+                else
+                    MODULES_TO_VERIFY=("${ALL_MODULES[@]}")
+                    shift
+                fi
+                ;;
             --status|status) status ;;
             --list|list) echo "Modules: ${ALL_MODULES[*]}"; exit 0 ;;
             --dry-run) DRY_RUN=1; shift ;;
@@ -475,8 +770,42 @@ parse_args() {
 
 main() {
     parse_args "$@"
+    
+    if [[ "$VERIFY_MODE" -eq 1 ]]; then
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            warn "Dry-run is ignored in verification mode. Real checks will be performed."
+        fi
+        validate_modules MODULES_TO_VERIFY
+        info "Running verification for modules: ${MODULES_TO_VERIFY[*]}"
+        for mod in "${MODULES_TO_VERIFY[@]}"; do
+            case "$mod" in
+                nvim) verify_nvim ;;
+                zsh) verify_zsh ;;
+                starship) verify_starship ;;
+                alacritty) verify_alacritty ;;
+                tmux) verify_tmux ;;
+                yazi) verify_yazi ;;
+                gitconfig) verify_gitconfig ;;
+                node) verify_node ;;
+                aliases) verify_aliases ;;
+                fonts) verify_fonts ;;
+            esac
+        done
+        
+        echo -e "\n\e[34m[VERIFICATION SUMMARY]\e[0m"
+        echo -e "  Passed: \e[32m$VERIFY_PASS_COUNT\e[0m"
+        echo -e "  Failed: \e[31m$VERIFY_FAIL_COUNT\e[0m"
+        
+        if [[ $VERIFY_FAIL_COUNT -gt 0 ]]; then
+            exit 1
+        else
+            exit 0
+        fi
+    fi
+
     detect_os
     setup_package_manager
+    validate_modules MODULES_TO_INSTALL
     
     execute mkdir -p "$STATE_DIR"
     execute chown -R "$REAL_USER:$REAL_USER" "$STATE_DIR" 2>/dev/null || true
