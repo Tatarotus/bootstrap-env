@@ -332,9 +332,17 @@ module_yazi() {
 git_config_set() {
     local key=$1
     local value=$2
-    local current=$(sudo -u "$REAL_USER" git config --global "$key" || echo "")
-    if [[ "$current" != "$value" ]]; then
-        execute sudo -u "$REAL_USER" git config --global "$key" "$value"
+    local current
+    if [[ "$EUID" -eq 0 ]]; then
+        current=$(sudo -u "$REAL_USER" git config --global "$key" || echo "")
+        if [[ "$current" != "$value" ]]; then
+            execute sudo -u "$REAL_USER" git config --global "$key" "$value"
+        fi
+    else
+        current=$(git config --global "$key" || echo "")
+        if [[ "$current" != "$value" ]]; then
+            execute git config --global "$key" "$value"
+        fi
     fi
 }
 
@@ -469,7 +477,12 @@ verify_dotfiles_module_present() {
 verify_git_config() {
     local key=$1
     local expected=$2
-    local current=$(sudo -u "$REAL_USER" git config --global "$key" || echo "")
+    local current
+    if [[ "$EUID" -eq 0 ]]; then
+        current=$(sudo -u "$REAL_USER" git config --global "$key" || echo "")
+    else
+        current=$(git config --global "$key" || echo "")
+    fi
     if [[ "$current" == "$expected" ]]; then
         return 0
     fi
@@ -834,7 +847,11 @@ main() {
     [[ -f "$STATE_FILE" ]] && sed 's/^/  ✓ /' "$STATE_FILE"
     if [[ "$DRY_RUN" -eq 0 ]] && command -v zsh &>/dev/null; then
         info "Switching to Zsh session..."
-        exec sudo -u "$REAL_USER" zsh -l
+        if [[ "$EUID" -eq 0 ]]; then
+            exec sudo -u "$REAL_USER" zsh -l
+        else
+            exec zsh -l
+        fi
     fi
 }
 
