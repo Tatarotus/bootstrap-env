@@ -658,8 +658,9 @@ verify_aliases() {
             [z]="z"
         )
         for key in "${!aliases[@]}"; do
-            if ! grep -q "alias $key=" "$zshrc" 2>/dev/null; then
-                errors+=("alias $key missing")
+            local val="${aliases[$key]}"
+            if ! grep -Fq "alias $key='$val'" "$zshrc" 2>/dev/null; then
+                errors+=("alias $key missing or mismatched")
             fi
         done
         if ! grep -q "zoxide init zsh" "$zshrc" 2>/dev/null; then
